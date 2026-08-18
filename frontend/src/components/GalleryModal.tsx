@@ -9,7 +9,8 @@ import {
   LoadImageThumb,
   PickFolder,
   RevealInFinder,
-} from "../../wailsjs/go/main/App";
+} from "../lib/backend";
+import { isWebRuntime } from "../lib/backend";
 import { useI18n } from "../i18n";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -77,6 +78,7 @@ function Thumb({ item, onClick }: { item: IGalleryImage; onClick: () => void }) 
 // 갤러리 모달: 생성 이미지 갤러리 + 내 컴퓨터 이미지 뷰어
 export default function GalleryModal({ onClose, onError }: IProps) {
   const { t } = useI18n();
+  const webRuntime = isWebRuntime();
   const [tab, setTab] = useState<"gallery" | "local">("gallery");
   const [galleryItems, setGalleryItems] = useState<IGalleryImage[]>([]);
   const [localItems, setLocalItems] = useState<IGalleryImage[]>([]);
@@ -218,9 +220,11 @@ export default function GalleryModal({ onClose, onError }: IProps) {
                 <Button variant="ghost" size="sm" onClick={refreshGallery} title={t("refresh")}>
                   <RefreshCw size={12} />
                 </Button>
-                <Button variant="outline" size="sm" disabled={!galleryPath} onClick={() => RevealInFinder(galleryPath)}>
-                  <FolderOpen size={12} /> {t("open_folder")}
-                </Button>
+                {!webRuntime && (
+                  <Button variant="outline" size="sm" disabled={!galleryPath} onClick={() => RevealInFinder(galleryPath)}>
+                    <FolderOpen size={12} /> {t("open_folder")}
+                  </Button>
+                )}
               </>
             ) : (
               <>

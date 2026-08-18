@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Images, Package, Plus, Settings, X } from "lucide-react";
-import { CancelGeneration, ClearSession, ExportProject, GenerateState, GetSettings, ListDirections, ListPresets, LoadSession, MirrorFrames, RevealInFinder, SaveSession } from "../wailsjs/go/main/App";
-import { EventsOn } from "../wailsjs/runtime/runtime";
+import { CancelGeneration, ClearSession, ExportProject, GenerateCharacter, GenerateState, GetSettings, ListDirections, ListPresets, LoadSession, MirrorFrames, RevealInFinder, SaveSession, EventsOn } from "./lib/backend";
 import CharacterPanel from "./components/CharacterPanel";
 import GalleryModal from "./components/GalleryModal";
 import PreviewPanel from "./components/PreviewPanel";
@@ -9,7 +8,7 @@ import SettingsModal, { ISettings } from "./components/SettingsModal";
 import StatesPanel from "./components/StatesPanel";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/ui/dialog";
-import { CharacterDef, DirectionInfo, FALLBACK_PRESETS, FrameItem, PresetInfo, StateDef, selectedFrames, uid } from "./types";
+import { CharacterDef, DirectionInfo, FALLBACK_PRESETS, FrameItem, PresetInfo, StateDef, presetInfoToState, selectedFrames, uid } from "./types";
 import { useI18n } from "./i18n";
 import { directionName } from "./i18n/catalog";
 import logoUrl from "./assets/logo.svg";
@@ -39,6 +38,7 @@ export default function App() {
   const [confirmNew, setConfirmNew] = useState(false);
   const [character, setCharacter] = useState<CharacterDef>({
     image: null,
+    photoSource: null,
     name: "",
     description: "",
     styleKey: "pixel",
@@ -90,6 +90,8 @@ export default function App() {
           if (s?.character) {
             setCharacter({
               image: s.character.image ?? null,
+              // 구버전 세션은 원본 사진 필드가 없으므로 기존 베이스를 참조 이미지로도 사용
+              photoSource: s.character.photoSource ?? s.character.image ?? null,
               name: s.character.name ?? "",
               description: s.character.description ?? "",
               styleKey: s.character.styleKey ?? "pixel",
@@ -169,6 +171,18 @@ export default function App() {
     // 직전 방향의 결과(정면 스트립, 미러 소스)를 읽을 수 있어야 함
     statesRef.current = statesRef.current.map((s) => (s.id === id ? { ...s, ...patch } : s));
     setStates(statesRef.current);
+  };
+
+  const persistSessionNow = async (selected = selectedId) => {
+    await SaveSession(
+      JSON.stringify({
+        v: 1,
+        character: charRef.current,
+        cellSize: cellRef.current,
+        states: statesRef.current,
+        selectedId: selected,
+      })
+    );
   };
 
   const generateOne = async (id: string, feedback = ""): Promise<boolean> => {
@@ -264,6 +278,95 @@ export default function App() {
       }
       updateState(id, { status: "error", error: msg });
       return false;
+    }
+  };
+
+  const handlePhotoGenerate = async (mode: "face" | "full"): Promise<void> => {
+    if (busyRef.current) return;
+    const ch = charRef.current;
+    const sourceImage = ch.photoSource;
+    if (!sourceImage) return;
+
+    setBusy(true);
+    cancelRef.current = false;
+    try {
+      const dataURL = await GenerateCharacter({
+        sourceImage,
+        mode,
+        description: ch.description,
+        styleKey: ch.styleKey,
+        styleCustom: ch.styleCustom,
+      } as any);
+      const nextCharacter = { ...charRef.current, image: dataURL };
+      charRef.current = nextCharacter;
+      setCharacter(nextCharacter);
+
+      if (mode !== "full") {
+        const existingFace = statesRef.current.find((s) => s.kind === "static" && s.name === "face");
+        const faceState: StateDef = {
+          id: existingFace?.id ?? uid("st"),
+          name: "face",
+          label: t("photo_face_state"),
+          frames: 1,
+          fps: 1,
+          loop: false,
+          action: "",
+          status: "done",
+          items: [{ id: uid("fr"), png: dataURL, selected: true }],
+          warnings: [],
+          feedback: "",
+          kind: "static",
+        };
+        const nextStates = existingFace
+          ? statesRef.current.map((s) => (s.id === existingFace.id ? faceState : s))
+          : [...statesRef.current, faceState];
+        statesRef.current = nextStates;
+        setStates(nextStates);
+        setSelectedId(faceState.id);
+        // 얼굴 결과는 애니메이션 상태가 없어 디바운스 저장만 기다리지 않고 즉시 보존
+        await persistSessionNow(faceState.id);
+        toast("success", t("photo_face_done"));
+        return;
+      }
+
+      const idlePreset = presets.find((p) => p.name === "idle") ?? FALLBACK_PRESETS.find((p) => p.name === "idle");
+      if (!idlePreset) {
+        await persistSessionNow(selectedId);
+        return;
+      }
+      const existing = statesRef.current.find((s) => s.name === "idle" && !s.dirBase);
+      const idle: StateDef = existing
+        ? {
+            ...existing,
+            label: idlePreset.label,
+            frames: idlePreset.frames,
+            fps: idlePreset.fps,
+            loop: idlePreset.loop,
+            action: idlePreset.action,
+            status: "idle" as const,
+            error: undefined,
+            rawStrip: undefined,
+            items: [],
+            warnings: [],
+            feedback: "",
+            scores: undefined,
+          }
+        : presetInfoToState(idlePreset);
+      const nextStates = existing
+        ? statesRef.current.map((s) => (s.id === existing.id ? idle : s))
+        : [...statesRef.current, idle];
+      statesRef.current = nextStates;
+      setStates(nextStates);
+      setSelectedId(idle.id);
+      if (await generateOne(idle.id)) {
+        await persistSessionNow(idle.id);
+        toast("success", t("photo_full_done"));
+      } else {
+        await persistSessionNow(idle.id);
+      }
+    } finally {
+      setBusy(false);
+      setProgress("");
     }
   };
 
@@ -483,7 +586,7 @@ export default function App() {
 
   const resetProject = async () => {
     setConfirmNew(false);
-    setCharacter({ image: null, name: "", description: "", styleKey: "pixel", styleCustom: "" });
+    setCharacter({ image: null, photoSource: null, name: "", description: "", styleKey: "pixel", styleCustom: "" });
     setStates([]);
     setSelectedId(null);
     setCellSize(256);
@@ -572,6 +675,7 @@ export default function App() {
             busy={busy}
             onChange={setCharacter}
             onCellSize={setCellSize}
+            onPhotoGenerate={handlePhotoGenerate}
             onError={(m) => (m.includes("취소") ? toast("info", t("toast_gen_canceled")) : toast("error", m))}
           />
         </section>

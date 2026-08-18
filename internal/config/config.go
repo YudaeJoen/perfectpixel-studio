@@ -79,7 +79,6 @@ func Load() Settings {
 			_ = json.Unmarshal(data, &s)
 		}
 	}
-
 	// v1 단일 키 → Gemini로 마이그레이션
 	if s.LegacyAPIKey != "" && s.Gemini.APIKey == "" {
 		s.Gemini.APIKey = s.LegacyAPIKey
@@ -148,21 +147,23 @@ func Save(s Settings) error {
 func loadEnvFallback() map[string]string {
 	out := map[string]string{}
 
-	// 1) .env 파일 (작업 디렉토리 + 실행 파일 디렉토리)
-	var dirs []string
-	if wd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, wd)
-	}
-	if exe, err := os.Executable(); err == nil {
-		dirs = append(dirs, filepath.Dir(exe))
-	}
-	for _, dir := range dirs {
-		for _, name := range []string{".env", ".env.local"} {
-			parseEnvFile(filepath.Join(dir, name), out)
+	if os.Getenv("PP_WEB") != "1" {
+		// 1) .env 파일 (작업 디렉토리 + 실행 파일 디렉토리)
+		var dirs []string
+		if wd, err := os.Getwd(); err == nil {
+			dirs = append(dirs, wd)
+		}
+		if exe, err := os.Executable(); err == nil {
+			dirs = append(dirs, filepath.Dir(exe))
+		}
+		for _, dir := range dirs {
+			for _, name := range []string{".env", ".env.local"} {
+				parseEnvFile(filepath.Join(dir, name), out)
+			}
 		}
 	}
 
-	// 2) OS 환경변수 (파일보다 우선)
+	// 2) OS 환경변수 (파일보다 우선; web mode에서는 유일한 키 소스)
 	for _, key := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "FAL_KEY", "FAL_API_KEY", "BYTEPLUS_API_KEY", "ARK_API_KEY"} {
 		if v := os.Getenv(key); v != "" {
 			out[key] = v

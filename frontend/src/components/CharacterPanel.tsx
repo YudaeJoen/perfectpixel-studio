@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ImagePlus, Loader2, Sparkles } from "lucide-react";
-import { PickImage, GenerateCharacter } from "../../wailsjs/go/main/App";
-import { CharacterDef, STYLE_OPTIONS, CELL_SIZES } from "../types";
+import { ImagePlus, Loader2, Maximize2, Sparkles, User } from "lucide-react";
+import { PickImage, GenerateCharacter } from "../lib/backend";
+import { CharacterDef, CELL_SIZES, STYLE_OPTIONS } from "../types";
 import { useI18n } from "../i18n";
 import { styleLabel } from "../i18n/catalog";
 import { Button } from "./ui/button";
@@ -18,12 +18,13 @@ interface IProps {
   onChange: (c: CharacterDef) => void;
   onCellSize: (n: number) => void;
   onError: (msg: string) => void;
+  onPhotoGenerate: (mode: "face" | "full") => Promise<void>;
 }
 
 // 1단계: 캐릭터 입력 패널 (이미지 업로드 또는 AI 생성)
-export default function CharacterPanel({ character, cellSize, busy, onChange, onCellSize, onError }: IProps) {
+export default function CharacterPanel({ character, cellSize, busy, onChange, onCellSize, onError, onPhotoGenerate }: IProps) {
   const { t, lang } = useI18n();
-  const [mode, setMode] = useState<"upload" | "ai">("upload");
+  const [mode, setMode] = useState<"upload" | "ai" | "photo">("upload");
   const [dragOver, setDragOver] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
 
@@ -32,7 +33,7 @@ export default function CharacterPanel({ character, cellSize, busy, onChange, on
   const pickFile = async () => {
     try {
       const dataURL = await PickImage();
-      if (dataURL) set({ image: dataURL });
+      if (dataURL) set({ image: dataURL, photoSource: dataURL });
     } catch (e) {
       onError(String(e));
     }
@@ -44,7 +45,10 @@ export default function CharacterPanel({ character, cellSize, busy, onChange, on
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => set({ image: String(reader.result) });
+    reader.onload = () => {
+      const dataURL = String(reader.result);
+      set({ image: dataURL, photoSource: dataURL });
+    };
     reader.readAsDataURL(file);
   };
 
@@ -57,7 +61,19 @@ export default function CharacterPanel({ character, cellSize, busy, onChange, on
         styleKey: character.styleKey,
         styleCustom: character.styleCustom,
       } as any);
-      if (dataURL) set({ image: dataURL });
+      if (dataURL) set({ image: dataURL, photoSource: null });
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setGenBusy(false);
+    }
+  };
+
+  const generatePhoto = async (kind: "face" | "full") => {
+    if (!character.photoSource || genBusy || busy) return;
+    setGenBusy(true);
+    try {
+      await onPhotoGenerate(kind);
     } catch (e) {
       onError(String(e));
     } finally {
@@ -73,10 +89,11 @@ export default function CharacterPanel({ character, cellSize, busy, onChange, on
       </div>
 
       <div className="panel-body">
-      <Tabs value={mode} onValueChange={(v) => setMode(v as "upload" | "ai")}>
+      <Tabs value={mode} onValueChange={(v) => setMode(v as "upload" | "ai" | "photo")}>
         <TabsList>
           <TabsTrigger value="upload">{t("upload_image")}</TabsTrigger>
           <TabsTrigger value="ai">{t("ai_generate")}</TabsTrigger>
+          <TabsTrigger value="photo">{t("photo_convert")}</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -121,6 +138,31 @@ export default function CharacterPanel({ character, cellSize, busy, onChange, on
           </>
         )}
       </div>
+
+      {mode === "photo" && (
+        <>
+          <div className="photo-actions">
+            <Button
+              variant="outline"
+              className="photo-action"
+              onClick={() => generatePhoto("face")}
+              disabled={!character.photoSource || genBusy || busy}
+            >
+              {genBusy ? <Loader2 size={13} className="animate-spin" /> : <User size={13} />}
+              {t("photo_face")}
+            </Button>
+            <Button
+              className="photo-action"
+              onClick={() => generatePhoto("full")}
+              disabled={!character.photoSource || genBusy || busy}
+            >
+              {genBusy ? <Loader2 size={13} className="animate-spin" /> : <Maximize2 size={13} />}
+              {t("photo_full")}
+            </Button>
+          </div>
+          <p className="hint">{t("photo_save_hint")}</p>
+        </>
+      )}
 
       <div className="field">
         <Label>{t("char_name")}</Label>

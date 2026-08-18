@@ -341,6 +341,23 @@ go run ./cmd/ppsamples scan    # scan sample/ strips and pick high-contrast case
 go test ./...          # unit tests (live API tests in live_test.go need a key)
 ```
 
+## Web service (Docker)
+
+The same generation pipeline can run as a browser-accessible single-admin service. API keys can be
+provided through Docker environment variables or saved from the web Settings dialog. Generated
+sessions, provider settings, gallery images, and temporary exports live in the `/data` Docker volume.
+
+```bash
+cp .env.example .env   # fill in one provider key
+docker compose up --build
+```
+
+Or run `./web.sh`; it uses Docker when available and otherwise builds/runs the web binary locally.
+
+Open `http://localhost:8080`. Set `PP_PORT` to change the host port. The web service exports a
+ZIP download instead of opening a native folder dialog. Authentication is intentionally disabled;
+run this service only on a trusted internal network.
+
 ## Contributing
 
 Issues and PRs are welcome.

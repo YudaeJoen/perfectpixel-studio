@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.web-data
+build/bin
+frontend/node_modules
+frontend/dist
+videos/perfectpixel-promo/node_modules
+skill/perfectpixel/skills/perfectpixel/bin
+skill/perfectpixel/skills/perfectpixel/.src
+*.dmg
+*.exe
+*.zip

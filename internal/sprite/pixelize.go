@@ -164,3 +164,29 @@ func PixelPostProcess(frames []*image.NRGBA, paletteSize int) {
 		frames[i] = Pixelize(f, scale)
 	}
 }
+
+// PhotoPostProcess keeps the palette controlled without snapping the entire
+// image to large blocks. Photo conversion prioritizes recognizable facial and
+// clothing details over forcing a coarse 32-64px grid.
+func PhotoPostProcess(img *image.NRGBA, paletteSize int) {
+	if img == nil || paletteSize <= 0 {
+		return
+	}
+	palette := BuildSharedPalette([]*image.NRGBA{img}, paletteSize)
+	if palette != nil {
+		ApplyPalette(img, palette)
+	}
+}
+
+// PhotoPaletteSizeForStyle returns a larger palette for photo conversion than
+// the animation pipeline uses, preserving details in faces and outfits.
+func PhotoPaletteSizeForStyle(styleKey string) int {
+	switch styleKey {
+	case "retro16":
+		return 64
+	case "pixel":
+		return 128
+	default:
+		return 0
+	}
+}

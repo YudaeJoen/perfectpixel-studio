@@ -117,6 +117,7 @@ export default function StatesPanel({
       <div className="state-list">
         {states.map((s) => {
           const sel = selectedFrames(s).length;
+          const isStatic = s.kind === "static";
           return (
             <div
               key={s.id}
@@ -158,6 +159,7 @@ export default function StatesPanel({
 
               {selectedId === s.id && (
                 <>
+                  {!isStatic && <>
                   <div className="state-card-controls" onClick={(e) => e.stopPropagation()}>
                     <div className="mini-field">
                       <label>{t("frames_count")}</label>
@@ -258,6 +260,8 @@ export default function StatesPanel({
                       </Button>
                     )}
                   </div>
+                  </>}
+                  {isStatic && <p className="hint" style={{ marginTop: 8 }}>{t("photo_static_hint")}</p>}
                 </>
               )}
 

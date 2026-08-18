@@ -122,7 +122,7 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string, refImages [][
 		cfg := &genConfig{ResponseModalities: []string{"TEXT", "IMAGE"}}
 		if aspectRatio != "" {
 			ic := &imageConfig{AspectRatio: aspectRatio}
-			if strings.HasPrefix(model, "gemini-3-pro") && aspectRatio != "1:1" {
+			if strings.HasPrefix(model, "gemini-3-pro") {
 				ic.ImageSize = "2K"
 			}
 			cfg.ImageConfig = ic

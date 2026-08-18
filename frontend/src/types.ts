@@ -33,6 +33,7 @@ export interface StateDef {
   facing?: string; // 8방향 키 (south 등, 미지정 시 방향 지시 없음)
   dirBase?: string; // 8방향 세트의 베이스 상태명 (세트 소속일 때만)
   mirrorOf?: string; // 미러링 소스 방향 키 (west→east 등, AI 생성 안 함)
+  kind?: "static"; // 사진 얼굴 아이콘처럼 애니메이션 없이 보관하는 결과
 }
 
 // 백엔드 sprite.DirectionInfo와 동일 구조 (ListDirections 응답)
@@ -53,6 +54,7 @@ export function directionLabel(directions: DirectionInfo[], key: string | undefi
 
 export interface CharacterDef {
   image: string | null; // dataURL
+  photoSource?: string | null; // 사진 변환 모드에서 반복 사용할 원본 dataURL
   name: string; // 내보내기 파일 프리픽스로 사용
   description: string;
   styleKey: string;

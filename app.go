@@ -18,13 +18,13 @@ import (
 	"perfectpixel/internal/config"
 	"perfectpixel/internal/gen"
 	"perfectpixel/internal/sprite"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App은 Wails 애플리케이션 본체입니다.
 type App struct {
-	ctx context.Context
+	ctx      context.Context
+	wails    bool
+	progress func(string, any)
 
 	genMu      sync.Mutex
 	genCancels map[int]context.CancelFunc // 진행 중인 생성 작업들의 취소 함수 (병렬 배치 지원)
@@ -33,11 +33,18 @@ type App struct {
 
 // NewApp은 새 App 인스턴스를 생성합니다.
 func NewApp() *App {
-	return &App{}
+	return &App{ctx: context.Background()}
+}
+
+// NewWebApp creates an App instance for the HTTP server. The web runtime does
+// not have a Wails context, but it still uses the same generation pipeline.
+func NewWebApp(progress func(string, any)) *App {
+	return &App{ctx: context.Background(), progress: progress}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.wails = true
 }
 
 // provider는 현재 활성 프로바이더 클라이언트를 반환합니다.
@@ -51,16 +58,24 @@ func (a *App) provider() (gen.Provider, error) {
 }
 
 func (a *App) emit(event string, data any) {
-	runtime.EventsEmit(a.ctx, event, data)
+	if a.progress != nil {
+		a.progress(event, data)
+	}
+	if a.wails && a.ctx != nil {
+		emitRuntime(a.ctx, event, data)
+	}
 }
 
 // genContext는 취소 가능한 생성용 컨텍스트를 만듭니다.
 // 병렬 배치 생성에서 여러 컨텍스트가 동시에 살아 있을 수 있으므로 각각을 추적하고,
 // 호출자가 완료 시 해제할 수 있도록 release 함수를 함께 반환합니다.
-func (a *App) genContext() (context.Context, func()) {
+func (a *App) genContext(parent context.Context) (context.Context, func()) {
 	a.genMu.Lock()
 	defer a.genMu.Unlock()
-	ctx, cancel := context.WithCancel(a.ctx)
+	if parent == nil {
+		parent = a.ctx
+	}
+	ctx, cancel := context.WithCancel(parent)
 	if a.genCancels == nil {
 		a.genCancels = make(map[int]context.CancelFunc)
 	}
@@ -237,23 +252,46 @@ func (a *App) ClearSession() error {
 
 var dataURLRe = regexp.MustCompile(`^data:image/[a-zA-Z+.-]+;base64,`)
 
+const maxDecodedImageBytes = 32 << 20
+
 func decodeDataURL(dataURL string) ([]byte, error) {
 	m := dataURLRe.FindString(dataURL)
 	if m == "" {
 		return nil, errors.New("올바른 이미지 데이터가 아닙니다")
 	}
+	if base64.StdEncoding.DecodedLen(len(dataURL)-len(m)) > maxDecodedImageBytes {
+		return nil, errors.New("이미지 데이터가 너무 큽니다")
+	}
 	return base64.StdEncoding.DecodeString(dataURL[len(m):])
 }
 
 func pngDataURL(img image.Image) (string, error) {
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	data, err := pngBytes(img)
+	if err != nil {
 		return "", err
 	}
-	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func pngBytes(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func decodeImage(data []byte) (image.Image, error) {
+	if len(data) > maxDecodedImageBytes {
+		return nil, errors.New("이미지 파일이 너무 큽니다")
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("이미지 디코딩 실패: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width > 4096 || config.Height > 4096 || int64(config.Width)*int64(config.Height) > 32_000_000 {
+		return nil, errors.New("이미지 해상도가 지원 범위를 초과했습니다")
+	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("이미지 디코딩 실패: %w", err)
@@ -263,12 +301,7 @@ func decodeImage(data []byte) (image.Image, error) {
 
 // PickImage는 파일 선택 대화상자를 열고 선택된 이미지를 dataURL로 반환합니다.
 func (a *App) PickImage() (string, error) {
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "베이스 이미지 선택",
-		Filters: []runtime.FileFilter{
-			{DisplayName: "이미지 (*.png;*.jpg;*.jpeg;*.webp)", Pattern: "*.png;*.jpg;*.jpeg;*.webp"},
-		},
-	})
+	path, err := openImageDialog(a.ctx)
 	if err != nil {
 		return "", err
 	}
@@ -293,10 +326,19 @@ type GenerateCharacterArgs struct {
 	Description string `json:"description"`
 	StyleKey    string `json:"styleKey"`
 	StyleCustom string `json:"styleCustom"`
+	SourceImage string `json:"sourceImage"` // 사진 변환 모드의 원본 이미지 dataURL
+	Mode        string `json:"mode"`        // face 또는 full
 }
 
-// GenerateCharacter는 설명만으로 베이스 캐릭터 이미지를 생성합니다.
+// GenerateCharacter는 설명 또는 사진 참조로 베이스 캐릭터 이미지를 생성합니다.
 func (a *App) GenerateCharacter(args GenerateCharacterArgs) (string, error) {
+	return a.generateCharacter(a.ctx, args)
+}
+
+func (a *App) generateCharacter(parent context.Context, args GenerateCharacterArgs) (string, error) {
+	if strings.TrimSpace(args.SourceImage) != "" {
+		return a.generateCharacterFromPhoto(parent, args)
+	}
 	if strings.TrimSpace(args.Description) == "" {
 		return "", errors.New("캐릭터 설명을 입력해 주세요")
 	}
@@ -311,7 +353,7 @@ func (a *App) GenerateCharacter(args GenerateCharacterArgs) (string, error) {
 	defer a.emit("progress", map[string]any{"phase": "idle", "message": ""})
 
 	a.emit("progress", map[string]any{"phase": "character", "message": "캐릭터 생성 중..."})
-	genCtx, releaseGen := a.genContext()
+	genCtx, releaseGen := a.genContext(parent)
 	defer releaseGen()
 	raw, err := p.GenerateImage(genCtx, prompt, nil, "1:1")
 	if err != nil {
@@ -329,6 +371,64 @@ func (a *App) GenerateCharacter(args GenerateCharacterArgs) (string, error) {
 		clean = single[0]
 	}
 	saveGalleryPNG("character-"+galleryStamp(), clean)
+	return pngDataURL(clean)
+}
+
+// generateCharacterFromPhoto는 사진의 인물 정체성을 유지한 픽셀 캐릭터를 만듭니다.
+// 원본은 먼저 PNG로 정규화해 프로바이더별 참조 이미지 형식을 통일합니다.
+func (a *App) generateCharacterFromPhoto(parent context.Context, args GenerateCharacterArgs) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(args.Mode))
+	if mode == "" {
+		mode = "full"
+	}
+	if mode != "face" && mode != "full" {
+		return "", errors.New("사진 변환 모드는 얼굴 또는 전신이어야 합니다")
+	}
+
+	raw, err := decodeDataURL(args.SourceImage)
+	if err != nil {
+		return "", fmt.Errorf("원본 사진 오류: %w", err)
+	}
+	source, err := decodeImage(raw)
+	if err != nil {
+		return "", fmt.Errorf("원본 사진 오류: %w", err)
+	}
+	ref, err := pngBytes(source)
+	if err != nil {
+		return "", fmt.Errorf("원본 사진 변환 실패: %w", err)
+	}
+
+	style := sprite.ResolveStyle(args.StyleKey, args.StyleCustom)
+	prompt := sprite.BuildPhotoCharacterPrompt(mode, args.Description, style)
+	p, err := a.provider()
+	if err != nil {
+		return "", err
+	}
+	defer a.emit("progress", map[string]any{"phase": "idle", "message": ""})
+
+	label := "전신"
+	if mode == "face" {
+		label = "얼굴"
+	}
+	a.emit("progress", map[string]any{"phase": "character", "message": label + " 픽셀 이미지 생성 중..."})
+	genCtx, releaseGen := a.genContext(parent)
+	defer releaseGen()
+	generated, err := p.GenerateImage(genCtx, prompt, [][]byte{ref}, "1:1")
+	if err != nil {
+		return "", friendlyErr(err)
+	}
+
+	img, err := decodeImage(generated)
+	if err != nil {
+		return "", err
+	}
+	clean := sprite.RemoveBackground(img)
+	if n := sprite.PhotoPaletteSizeForStyle(args.StyleKey); n > 0 {
+		sprite.PhotoPostProcess(clean, n)
+	}
+	if err := saveGalleryPNG("character-"+mode+"-"+galleryStamp(), clean); err != nil {
+		return "", fmt.Errorf("사진 변환 결과 저장 실패: %w", err)
+	}
 	return pngDataURL(clean)
 }
 
@@ -358,6 +458,10 @@ type StateResult struct {
 
 // GenerateState는 한 상태의 스트립을 생성하고 프레임을 추출합니다.
 func (a *App) GenerateState(args GenerateStateArgs) (StateResult, error) {
+	return a.generateState(a.ctx, args)
+}
+
+func (a *App) generateState(parent context.Context, args GenerateStateArgs) (StateResult, error) {
 	res := StateResult{Name: args.State.Name, Expected: args.State.Frames}
 
 	if args.State.Frames < 1 || args.State.Frames > 10 {
@@ -370,6 +474,9 @@ func (a *App) GenerateState(args GenerateStateArgs) (StateResult, error) {
 	cellSize := args.CellSize
 	if cellSize <= 0 {
 		cellSize = 256
+	}
+	if cellSize > 1024 {
+		return res, errors.New("셀 크기는 1024 이하이어야 합니다")
 	}
 	margin := args.SafeMargin
 	if margin <= 0 {
@@ -405,7 +512,7 @@ func (a *App) GenerateState(args GenerateStateArgs) (StateResult, error) {
 	const maxAttempts = 3
 	expected := args.State.Frames
 	feedback := args.Feedback
-	genCtx, releaseGen := a.genContext()
+	genCtx, releaseGen := a.genContext(parent)
 	defer releaseGen()
 	var best StateResult
 	var bestImgs []*image.NRGBA
@@ -580,14 +687,8 @@ func (a *App) ExportProject(args ExportArgs) (string, error) {
 	if len(args.States) == 0 {
 		return "", errors.New("내보낼 애니메이션이 없습니다")
 	}
-	cellSize := args.CellSize
-	if cellSize <= 0 {
-		cellSize = 256
-	}
 
-	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "내보낼 폴더 선택",
-	})
+	dir, err := openDirectoryDialog(a.ctx, "내보낼 폴더 선택")
 	if err != nil {
 		return "", err
 	}
@@ -608,6 +709,34 @@ func (a *App) ExportProject(args ExportArgs) (string, error) {
 	defer a.emit("progress", map[string]any{"phase": "idle", "message": ""})
 	a.emit("progress", map[string]any{"phase": "export", "message": "스프라이트시트·GIF 내보내는 중..."})
 
+	if err := exportProjectToDir(args, outDir); err != nil {
+		return "", err
+	}
+	return outDir, nil
+}
+
+// exportProjectToDir writes a project to a known directory. The Wails method
+// wraps this with a native directory picker; the web API supplies its own
+// server-side output directory.
+func exportProjectToDir(args ExportArgs, outDir string) error {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	cellSize := args.CellSize
+	if cellSize <= 0 {
+		cellSize = 256
+	}
+	if cellSize > 1024 {
+		return errors.New("셀 크기는 1024 이하이어야 합니다")
+	}
+
+	charName := strings.TrimSpace(args.Character)
+	if charName == "" {
+		charName = "character"
+	}
+	safeName := sanitizeName(charName)
+	prefix := safeName + "-"
+
 	// 상태 프레임 디코딩
 	var stateFrames []sprite.StateFrames
 	for _, st := range args.States {
@@ -620,87 +749,86 @@ func (a *App) ExportProject(args ExportArgs) (string, error) {
 		for _, fu := range st.Frames {
 			raw, err := decodeDataURL(fu)
 			if err != nil {
-				return "", fmt.Errorf("%s 프레임 디코딩 실패: %w", st.Name, err)
+				return fmt.Errorf("%s 프레임 디코딩 실패: %w", st.Name, err)
 			}
 			img, err := decodeImage(raw)
 			if err != nil {
-				return "", err
+				return err
 			}
 			sf.Frames = append(sf.Frames, sprite.ToNRGBA(img))
 		}
 		stateFrames = append(stateFrames, sf)
 	}
 	if len(stateFrames) == 0 {
-		return "", errors.New("내보낼 프레임이 없습니다")
+		return errors.New("내보낼 프레임이 없습니다")
 	}
 
 	// 파일명 프리픽스: 캐릭터별 산출물이 섞여도 구분되도록 모든 파일 앞에 캐릭터 이름을 붙인다.
-	prefix := safeName + "-"
 
 	// 1) 스프라이트시트 + 매니페스트
 	sheet, manifest := sprite.ComposeAtlas(safeName, stateFrames, cellSize, cellSize)
 	if err := writePNG(filepath.Join(outDir, prefix+"sprite-sheet.png"), sheet); err != nil {
-		return "", err
+		return err
 	}
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := os.WriteFile(filepath.Join(outDir, prefix+"manifest.json"), manifestJSON, 0o644); err != nil {
-		return "", err
+		return err
 	}
 	// Aseprite 호환 JSON (Phaser/Unity/Godot 임포터용)
 	aseJSON, err := sprite.BuildAsepriteJSON(manifest)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := os.WriteFile(filepath.Join(outDir, prefix+"sprite-sheet.json"), aseJSON, 0o644); err != nil {
-		return "", err
+		return err
 	}
 
 	// 2) 상태별 GIF + 개별 프레임 PNG
 	for _, sf := range stateFrames {
 		stateDir := filepath.Join(outDir, "frames", sanitizeName(sf.Spec.Name))
 		if err := os.MkdirAll(stateDir, 0o755); err != nil {
-			return "", err
+			return err
 		}
 		for i, frame := range sf.Frames {
 			if err := writePNG(filepath.Join(stateDir, fmt.Sprintf("%sframe-%02d.png", prefix, i)), frame); err != nil {
-				return "", err
+				return err
 			}
 		}
 		stateName := sanitizeName(sf.Spec.Name)
 		gifBytes, err := sprite.EncodeGIF(sf.Frames, sf.Spec.FPS, sf.Spec.Loop)
 		if err != nil {
-			return "", fmt.Errorf("%s GIF 인코딩 실패: %w", sf.Spec.Name, err)
+			return fmt.Errorf("%s GIF 인코딩 실패: %w", sf.Spec.Name, err)
 		}
 		gifDir := filepath.Join(outDir, "gif")
 		if err := os.MkdirAll(gifDir, 0o755); err != nil {
-			return "", err
+			return err
 		}
 		if err := os.WriteFile(filepath.Join(gifDir, prefix+stateName+".gif"), gifBytes, 0o644); err != nil {
-			return "", err
+			return err
 		}
 		// APNG: 풀 알파 지원 (GIF의 1-bit 투명도 한계 보완)
 		apngBytes, err := sprite.EncodeAPNG(sf.Frames, sf.Spec.FPS, sf.Spec.Loop)
 		if err != nil {
-			return "", fmt.Errorf("%s APNG 인코딩 실패: %w", sf.Spec.Name, err)
+			return fmt.Errorf("%s APNG 인코딩 실패: %w", sf.Spec.Name, err)
 		}
 		apngDir := filepath.Join(outDir, "apng")
 		if err := os.MkdirAll(apngDir, 0o755); err != nil {
-			return "", err
+			return err
 		}
 		if err := os.WriteFile(filepath.Join(apngDir, prefix+stateName+".png"), apngBytes, 0o644); err != nil {
-			return "", err
+			return err
 		}
 	}
 
-	return outDir, nil
+	return nil
 }
 
 // RevealInFinder는 내보낸 폴더를 파일 탐색기에서 엽니다.
 func (a *App) RevealInFinder(path string) {
-	runtime.BrowserOpenURL(a.ctx, "file://"+path)
+	openBrowserURL(a.ctx, "file://"+path)
 }
 
 func writePNG(path string, img image.Image) error {

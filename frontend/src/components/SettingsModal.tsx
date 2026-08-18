@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
-import { SaveProviderKey, SaveProviderModel, SetProvider } from "../../wailsjs/go/main/App";
+import { SaveProviderKey, SaveProviderModel, SetProvider, isWebRuntime } from "../lib/backend";
 import { useI18n, LANGUAGES, Lang } from "../i18n";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -44,6 +44,7 @@ export default function SettingsModal({ settings, onClose, onSaved }: IProps) {
   const [model, setModel] = useState(settings.providers?.[settings.provider || "gemini"]?.model ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const webRuntime = isWebRuntime();
 
   const info = settings.providers?.[tab];
   const meta = PROVIDERS.find((p) => p.key === tab)!;
@@ -102,8 +103,8 @@ export default function SettingsModal({ settings, onClose, onSaved }: IProps) {
   };
 
   return (
-    <Dialog open onOpenChange={(open) => !open && activeHasKey && onClose()}>
-      <DialogContent hideClose={!activeHasKey}>
+    <Dialog open onOpenChange={(open) => !open && (activeHasKey || webRuntime) && onClose()}>
+      <DialogContent hideClose={!activeHasKey && !webRuntime}>
         <DialogTitle>{t("settings")}</DialogTitle>
 
         <div className="field">
@@ -189,7 +190,7 @@ export default function SettingsModal({ settings, onClose, onSaved }: IProps) {
 
         <p className="hint">
           {t(`help_${tab}`)}
-          <br />{t("key_local_note")}
+          <br />{webRuntime ? t("key_web_note") : t("key_local_note")}
         </p>
 
         {error && <p className="hint" style={{ color: "hsl(var(--destructive))" }}>{error}</p>}

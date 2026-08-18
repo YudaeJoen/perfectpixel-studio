@@ -1,0 +1,22 @@
+services:
+  perfectpixel:
+    build: .
+    ports:
+      - "${PP_PORT:-8080}:8080"
+    environment:
+      PP_WEB_ADDR: ":8080"
+      PP_DATA_DIR: /data
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      FAL_KEY: ${FAL_KEY:-}
+      FAL_API_KEY: ${FAL_API_KEY:-}
+      BYTEPLUS_API_KEY: ${BYTEPLUS_API_KEY:-}
+      ARK_API_KEY: ${ARK_API_KEY:-}
+    volumes:
+      - perfectpixel-data:/data
+    restart: unless-stopped
+
+volumes:
+  perfectpixel-data:

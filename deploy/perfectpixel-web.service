@@ -1,0 +1,33 @@
+[Unit]
+Description=PerfectPixel web server
+Documentation=https://github.com/anomalyco/perfectpixel-studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=perfectpixel
+Group=perfectpixel
+WorkingDirectory=/opt/perfectpixel
+EnvironmentFile=-/opt/perfectpixel/.env
+Environment=PP_WEB=1
+Environment=PP_WEB_ADDR=:8080
+Environment=PP_DATA_DIR=/var/lib/perfectpixel
+ExecStart=/opt/perfectpixel/perfectpixel-web
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/perfectpixel
+
+[Install]
+WantedBy=multi-user.target

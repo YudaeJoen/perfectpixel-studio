@@ -116,6 +116,59 @@ func BuildCharacterPrompt(description, style string) string {
 	return b.String()
 }
 
+// BuildPhotoCharacterPrompt는 원본 사진을 픽셀 캐릭터로 변환하는 프롬프트를 만듭니다.
+// mode가 face이면 얼굴만, full이면 머리부터 발끝까지 전신만 허용합니다.
+func BuildPhotoCharacterPrompt(mode, description, style string) string {
+	var b strings.Builder
+	face := strings.EqualFold(strings.TrimSpace(mode), "face")
+	if face {
+		b.WriteString("Create one square pixel-art game character FACE ICON from the attached reference photo.\n\n")
+		b.WriteString("Framing mandate:\n")
+		b.WriteString("- Show ONLY the head and face, cropped immediately below the jawline. This is a face icon, not a bust, portrait, or half-body image.\n")
+		b.WriteString("- Do not show neck, shoulders, chest, torso, arms, hands, waist, or any upper-body clothing.\n")
+		b.WriteString("- Center one front-facing head, filling about 70% of the square canvas with a clean readable silhouette.\n")
+	} else {
+		b.WriteString("Create one complete full-body pixel-art game character from the attached reference photo.\n\n")
+		b.WriteString("Framing mandate:\n")
+		b.WriteString("- Show exactly one character from the top of the head to the bottoms of both feet. This is a full-body sprite, not a bust or half-body crop.\n")
+		b.WriteString("- Include the complete silhouette, both arms, both legs, feet, hairstyle, outfit and distinctive accessories.\n")
+		b.WriteString("- Keep the character vertically centered with generous breathing room and no body part clipped by the canvas.\n")
+		b.WriteString("- If the reference photo is cropped and does not show the lower body, infer a simple cohesive full outfit from the visible clothing; never return a bust or half-body crop.\n")
+	}
+	b.WriteString("\nReference identity:\n")
+	b.WriteString("- Use the attached photo as the canonical reference for identity, face, hair, skin tone, clothing colors and distinctive features.\n")
+	b.WriteString("- Simplify photographic detail into clear game-sprite shapes. Preserve recognizable features without realistic skin texture.\n")
+	if d := strings.TrimSpace(description); d != "" {
+		fmt.Fprintf(&b, "- Optional user note: %s.\n", d)
+	}
+	b.WriteString("\nRender contract (obey strictly): ")
+	b.WriteString(photoStyleContract(style))
+	b.WriteString("\n\n")
+	b.WriteString(canvasContract())
+	b.WriteString("\n")
+	b.WriteString(rejectClause())
+	if face {
+		b.WriteString("- Reject any neck, shoulders, neckline, chest, torso, arms, hands, or visible upper-body crop. The output must be face-only.\n")
+	} else {
+		b.WriteString("- Reject any bust, portrait crop, waist-up pose, or missing feet. The output must be head-to-feet full body.\n")
+	}
+	return b.String()
+}
+
+// photoStyleContract is intentionally finer than the regular animation
+// contract. Large grid snapping destroys photographic identity, especially
+// around eyes, hair and clothing seams.
+func photoStyleContract(style string) string {
+	s := strings.ToLower(style)
+	if strings.Contains(s, "pixel") || strings.Contains(s, "sprite") || strings.Contains(s, "mmorpg") {
+		return "detailed crisp pixel-art game sprite rendered at high resolution, using fine 2-4 pixel clusters rather than giant blocks, " +
+			"small readable pixel clusters, sharp hard edges, clean dark outline, restrained but rich palette, " +
+			"clear eyes, grouped hair shapes, and distinct clothing color blocks. " +
+			"Do not enlarge a low-detail 32-64px icon, and do not use giant square blocks, blur, smearing, watercolor, gradients, or painterly texture."
+	}
+	return style + " Preserve crisp edges and recognizable small details; do not blur or smear the reference."
+}
+
 // BuildStripPrompt는 상태별 가로 스트립 생성 프롬프트를 만듭니다.
 func BuildStripPrompt(description, style string, spec StateSpec, feedback string) string {
 	var b strings.Builder

@@ -7,6 +7,10 @@ frontend/dist
 frontend/package.json.md5
 .DS_Store
 
+# Web-mode local data
+.web-data/
+.web-bin/
+
 # 검증 하니스 빌드 산출물
 /ppvalidate
 

@@ -12,10 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"perfectpixel/internal/config"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	xdraw "golang.org/x/image/draw"
+	"perfectpixel/internal/config"
 
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/webp"
@@ -114,7 +112,7 @@ func (a *App) ListFolderImages(dir string) ([]GalleryImage, error) {
 
 // PickFolder는 폴더 선택 대화상자를 열고 선택된 경로를 반환합니다 (취소 시 빈 문자열).
 func (a *App) PickFolder() (string, error) {
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "이미지 폴더 선택"})
+	return openDirectoryDialog(a.ctx, "이미지 폴더 선택")
 }
 
 // DeleteGalleryImage는 갤러리 디렉토리 내부의 이미지만 삭제합니다.
@@ -192,13 +190,13 @@ func galleryStamp() string {
 	return fmt.Sprintf("%s-%03d", time.Now().Format("20060102-150405"), n)
 }
 
-// saveGalleryPNG는 생성 결과 한 장을 갤러리에 보관합니다 (실패해도 생성 흐름은 계속).
-func saveGalleryPNG(name string, img image.Image) {
+// saveGalleryPNG는 생성 결과 한 장을 갤러리에 보관합니다.
+func saveGalleryPNG(name string, img image.Image) error {
 	dir, err := ensureGalleryDir()
 	if err != nil {
-		return
+		return err
 	}
-	_ = writePNG(filepath.Join(dir, name+".png"), img)
+	return writePNG(filepath.Join(dir, name+".png"), img)
 }
 
 // composeStrip는 프레임들을 가로로 이어 붙여 하나의 스프라이트 스트립으로 만듭니다.
@@ -233,5 +231,5 @@ func saveGalleryFrames(state string, frames []*image.NRGBA) {
 	if strip == nil {
 		return
 	}
-	saveGalleryPNG(fmt.Sprintf("%s-%s", sanitizeName(state), galleryStamp()), strip)
+	_ = saveGalleryPNG(fmt.Sprintf("%s-%s", sanitizeName(state), galleryStamp()), strip)
 }

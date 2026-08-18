@@ -75,6 +75,8 @@ export namespace main {
 	    description: string;
 	    styleKey: string;
 	    styleCustom: string;
+	    sourceImage: string;
+	    mode: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GenerateCharacterArgs(source);
@@ -85,6 +87,8 @@ export namespace main {
 	        this.description = source["description"];
 	        this.styleKey = source["styleKey"];
 	        this.styleCustom = source["styleCustom"];
+	        this.sourceImage = source["sourceImage"];
+	        this.mode = source["mode"];
 	    }
 	}
 	export class GenerateStateArgs {
